@@ -20,10 +20,9 @@ const bot = new Telegraf(TG_TOKEN);
 const db = new Database("autoposter.db");
 
 /* ===============================
-   DATABASE & MIGRATION (FIX)
+   DATABASE & MIGRATION
 ================================ */
 
-// 1. Create tables (Basic structure)
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY, 
@@ -59,11 +58,9 @@ db.exec(`
   );
 `);
 
-// 2. Migration: Check if 'owner_id' exists, if not add it.
 try {
   const columns = db.prepare("PRAGMA table_info(chats)").all();
   const hasOwnerId = columns.some(col => col.name === 'owner_id');
-  
   if (!hasOwnerId) {
     console.log("⏳ Updating database: Adding 'owner_id' column...");
     db.exec("ALTER TABLE chats ADD COLUMN owner_id INTEGER");
@@ -87,27 +84,27 @@ const setSetting = (chatId, key, value) => {
 };
 
 /* ===============================
-   AI ENGINE
+   AI ENGINE (Human-like & Smart)
 ================================ */
 
 async function generateHumanContent(post) {
   const prompt = `
-تو یک منتقد و نویسنده تکنولوژی هستی. 
-وظیفه تو تصمیم‌گیری نهایی است.
+تو یک نویسنده تکنولوژی باحال و باسواد هستی که برای یک کانال تلگرام فارسی مینویسی.
 
-قوانین سخت‌گیرانه (REJECTION):
-- اگر مطلب تبلیغاتی، خبر استخدام، فاندینگ گیری، همکاری تجاری، خبر رسمی شرکت (PR)، یا چیز بی‌ارزش است -> بنویس: STOP
-- اگر مطلب فقط یک "عنوان جذاب" ولی محتوای خالی دارد -> بنویس: STOP
+قوانین حیاتی:
+1. **زبان:** فارسی بنویس اما تمام اصطلاحات تخصصی، نام محصولات، زبان‌های برنامه‌نویسی و کلمات کلیدی را انگلیسی بنویس. (مثال: "این API عالیه"، نه "رابط برنامه‌نویسی عالیه").
+2. **لحن:** خودمونی، انگار داری با دوستت حرف میزنی. از کلمات محاوره‌ای استفاده کن.
+3. **ساختار:** 
+   - اول یه جمله قلاب‌دار بذار.
+   - توضیح بده ولی خلاصه باشه.
+   - حتماً یک نظر شخصی یا تحلیل کوچیک اضافه کن (مثلاً: "به نظر من این آپدیت...")
+   - آخرش یه سوال بپرس تا مخاطب جواب بده.
+4. **ممنوعیت‌ها:**
+   - لینک نذار.
+   - نگار "این خبر میگوید" یا "طبق گزارش". مستقیم برو سر اصل مطلب.
+   - اگر خبر بی‌ارزش، تبلیغاتی، استخدام یا PR شرکت بود فقط بنویس: STOP
 
-اگر مطلب ارزشمند بود:
-یک پست کوتاه و انسانی بنویس.
-- لحن: خودمونی، مثل یک متخصص که با دوستش حرف می‌زنه.
-- نترس که نظر شخصی بدهی.
-- خلاصه و مفید بنویس.
-- هیچ‌وقت لینک ننویس.
-- آخر مطلب یه سوال بپرس تا بحث داغ بشه.
-
-عنوان:
+عنوان خبر:
  ${post.title}
 
 منبع:
@@ -125,7 +122,7 @@ async function generateHumanContent(post) {
     );
     return res.data.choices[0].message.content.trim();
   } catch (e) {
-    console.error("AI Error:", e.response?.data || e.message);
+    console.error("❌ AI Error:", e.response?.data || e.message);
     return null;
   }
 }
@@ -139,7 +136,8 @@ const sources = {
     fetch: async () => {
       try {
         const ids = await axios.get("https://hacker-news.firebaseio.com/v0/topstories.json");
-        const id = ids.data[Math.floor(Math.random() * 10)];
+        // Pick from top 50 to have variety but still fresh
+        const id = ids.data[Math.floor(Math.random() * 50)];
         const p = await axios.get(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
         if (!p.data || !p.data.title) return null;
         return { title: p.data.title, url: p.data.url, source: "HackerNews" };
@@ -149,8 +147,8 @@ const sources = {
   DevTo: {
     fetch: async () => {
       try {
-        const res = await axios.get("https://dev.to/api/articles?per_page=10");
-        const p = res.data[Math.floor(Math.random() * 10)];
+        const res = await axios.get("https://dev.to/api/articles?per_page=30");
+        const p = res.data[Math.floor(Math.random() * 30)];
         return { title: p.title, url: p.url, source: "Dev.to" };
       } catch { return null; }
     }
@@ -166,21 +164,29 @@ function pickSource() {
    TELEGRAM UI & LOGIC
 ================================ */
 
-// 1. Save User on Start
 bot.command('start', (ctx) => {
   const u = ctx.from;
   db.prepare("INSERT OR REPLACE INTO users(id, first_name, username) VALUES(?,?,?)")
     .run(u.id, u.first_name, u.username);
 
-  ctx.reply('سلام! ✋\nبه ربات هوشمند خوش اومدی.\n\nبا استفاده از دکمه زیر می‌تونی کانال‌هات رو مدیریت کنی.', 
-    Markup.inlineKeyboard([
-      [Markup.button.callback("⚙️ مدیریت کانال‌ها", "open_main_menu")],
-      [Markup.button.callback("📊 آمار من", "show_analytics")]
-    ])
-  );
+  const chats = db.prepare("SELECT id FROM chats WHERE owner_id = ?").all(u.id);
+  
+  if (chats.length > 0) {
+      ctx.reply('سلام دوباره! 👋\nکنترل پنل شما آماده است.', 
+        Markup.inlineKeyboard([
+          [Markup.button.callback("⚙️ مدیریت کانال‌ها", "open_main_menu")],
+          [Markup.button.callback("📊 آمار من", "show_analytics")]
+        ])
+      );
+  } else {
+      ctx.reply('سلام! ✋\nمن ربات پوستر هوشمند هستم.\n\nبرای شروع، ابتدا مرا در کانال خود **ادمین** کنید، سپس دکمه زیر را بزنید.', 
+        Markup.inlineKeyboard([
+          [Markup.button.callback("🔄 بررسی کانال‌ها", "open_main_menu")]
+        ])
+      );
+  }
 });
 
-// 2. Handle Bot being added to a Channel/Group
 bot.on('my_chat_member', async (ctx) => {
   const chat = ctx.myChatMember.chat;
   const actor = ctx.myChatMember.from; 
@@ -188,10 +194,8 @@ bot.on('my_chat_member', async (ctx) => {
   
   if (status === 'administrator' || status === 'member') {
     db.prepare("INSERT OR IGNORE INTO users(id, first_name) VALUES(?,?)").run(actor.id, actor.first_name);
-
     db.prepare("INSERT OR REPLACE INTO chats(id, owner_id, title, type) VALUES(?,?,?,?)")
       .run(chat.id, actor.id, chat.title || "Private", chat.type);
-    
     console.log(`✅ User ${actor.id} added bot to ${chat.title}`);
   } else {
     db.prepare("DELETE FROM chats WHERE id=?").run(chat.id);
@@ -199,14 +203,14 @@ bot.on('my_chat_member', async (ctx) => {
   }
 });
 
-// 3. Settings Menu
 async function openMainMenu(ctx) {
   const userId = ctx.from.id;
-
   const chats = db.prepare("SELECT id, title FROM chats WHERE owner_id = ?").all(userId);
   
   if (chats.length === 0) {
-    return ctx.reply("⚠️ شما هنوز هیچ کانالی ثبت نکرده‌اید.\n\nلطفا ابتدا بات را در کانال خود ادمین کنید.");
+      const text = "⚠️ شما هنوز هیچ کانالی ثبت نکرده‌اید.\n1. من را در کانال ادمین کنید.\n2. سپس بازگردید.";
+      if (ctx.callbackQuery) return ctx.editMessageText(text);
+      return ctx.reply(text);
   }
 
   const buttons = chats.map(c => [
@@ -225,12 +229,12 @@ async function openMainMenu(ctx) {
 bot.command('settings', (ctx) => openMainMenu(ctx));
 
 bot.action('open_main_menu', async (ctx) => {
-  await ctx.answerCbQuery(); // FIX: Answer immediately
+  await ctx.answerCbQuery();
   openMainMenu(ctx);
 });
 
 bot.action('show_analytics', async (ctx) => {
-  await ctx.answerCbQuery(); // FIX: Answer immediately
+  await ctx.answerCbQuery();
   const userId = ctx.from.id;
   const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   
@@ -249,25 +253,27 @@ bot.action('show_analytics', async (ctx) => {
   ctx.reply(msg, { parse_mode: "Markdown" });
 });
 
-// --- Management Actions ---
-
 bot.action(/manage_(-?\d+)/, async (ctx) => {
-  await ctx.answerCbQuery(); // FIX: Answer immediately
+  await ctx.answerCbQuery();
   const chatId = ctx.match[1];
   const userId = ctx.from.id;
 
   const chatInfo = db.prepare("SELECT title FROM chats WHERE id=? AND owner_id=?").get(chatId, userId);
-  if (!chatInfo) return ctx.editMessageText("🚫 خطا: شما دسترسی به این کانال را ندارید.");
+  if (!chatInfo) return ctx.editMessageText("🚫 خطا: دسترسی ندارید.");
 
-  const interval = getSetting(chatId, "interval", "60");
+  const interval = getSetting(chatId, "interval", "3600");
   const status = getSetting(chatId, "enabled", "1");
   const statusText = status === "1" ? "✅ روشن" : "❌ خاموش";
+
+  let displayTime = "";
+  if (interval < 60) displayTime = `${interval} ثانیه (🚀 تست)`;
+  else displayTime = `${interval / 60} دقیقه`;
 
   await ctx.editMessageText(`⚙️ تنظیمات: <b>${chatInfo.title}</b>`, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
       [Markup.button.callback(`وضعیت: ${statusText}`, `toggle_${chatId}`)],
-      [Markup.button.callback(`⏱ فاصله: ${interval} دقیقه`, `change_time_${chatId}`)],
+      [Markup.button.callback(`⏱ فاصله: ${displayTime}`, `change_time_${chatId}`)],
       [Markup.button.callback("🗑 حذف", `delete_${chatId}`)],
       [Markup.button.callback("« بازگشت", "open_main_menu")]
     ])
@@ -275,9 +281,8 @@ bot.action(/manage_(-?\d+)/, async (ctx) => {
 });
 
 bot.action(/toggle_(-?\d+)/, async (ctx) => {
-  await ctx.answerCbQuery("✅ تغییر کرد"); // FIX: Answer immediately
+  await ctx.answerCbQuery("✅ تغییر کرد");
   const chatId = ctx.match[1];
-  
   const chat = db.prepare("SELECT id FROM chats WHERE id=? AND owner_id=?").get(chatId, ctx.from.id);
   if(!chat) return;
 
@@ -285,14 +290,15 @@ bot.action(/toggle_(-?\d+)/, async (ctx) => {
   const newStatus = current === "1" ? "0" : "1";
   setSetting(chatId, "enabled", newStatus);
   
-  const interval = getSetting(chatId, "interval", "60");
+  const interval = getSetting(chatId, "interval", "3600");
   const statusText = newStatus === "1" ? "✅ روشن" : "❌ خاموش";
+  let displayTime = interval < 60 ? `${interval} ثانیه` : `${interval / 60} دقیقه`;
 
-  await ctx.editMessageText(`⚙️ تنظیمات (آپدیت شد)`, {
+  await ctx.editMessageText(`⚙️ تنظیمات`, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
       [Markup.button.callback(`وضعیت: ${statusText}`, `toggle_${chatId}`)],
-      [Markup.button.callback(`⏱ فاصله: ${interval} دقیقه`, `change_time_${chatId}`)],
+      [Markup.button.callback(`⏱ فاصله: ${displayTime}`, `change_time_${chatId}`)],
       [Markup.button.callback("🗑 حذف", `delete_${chatId}`)],
       [Markup.button.callback("« بازگشت", "open_main_menu")]
     ])
@@ -300,26 +306,27 @@ bot.action(/toggle_(-?\d+)/, async (ctx) => {
 });
 
 bot.action(/change_time_(-?\d+)/, async (ctx) => {
-  await ctx.answerCbQuery(); // FIX: Answer immediately
+  await ctx.answerCbQuery();
   const chatId = ctx.match[1];
-  
   const chat = db.prepare("SELECT id FROM chats WHERE id=? AND owner_id=?").get(chatId, ctx.from.id);
   if(!chat) return;
 
-  const current = parseInt(getSetting(chatId, "interval", "60"));
-  const times = [30, 60, 120, 180];
+  const current = parseInt(getSetting(chatId, "interval", "3600"));
+  // 10s, 30m, 60m, 120m
+  const times = [10, 1800, 3600, 7200]; 
   const next = times[(times.indexOf(current) + 1) % times.length];
   
   setSetting(chatId, "interval", next.toString());
 
   const status = getSetting(chatId, "enabled", "1");
   const statusText = status === "1" ? "✅ روشن" : "❌ خاموش";
+  let displayTime = next < 60 ? `${next} ثانیه (🚀 تست)` : `${next / 60} دقیقه`;
 
   await ctx.editMessageText(`⚙️ تنظیمات`, {
     parse_mode: "HTML",
     ...Markup.inlineKeyboard([
       [Markup.button.callback(`وضعیت: ${statusText}`, `toggle_${chatId}`)],
-      [Markup.button.callback(`⏱ فاصله: ${next} دقیقه`, `change_time_${chatId}`)],
+      [Markup.button.callback(`⏱ فاصله: ${displayTime}`, `change_time_${chatId}`)],
       [Markup.button.callback("🗑 حذف", `delete_${chatId}`)],
       [Markup.button.callback("« بازگشت", "open_main_menu")]
     ])
@@ -327,7 +334,7 @@ bot.action(/change_time_(-?\d+)/, async (ctx) => {
 });
 
 bot.action(/delete_(-?\d+)/, async (ctx) => {
-  await ctx.answerCbQuery("حذف شد"); // FIX: Answer immediately
+  await ctx.answerCbQuery("حذف شد");
   const chatId = ctx.match[1];
   const chat = db.prepare("SELECT id FROM chats WHERE id=? AND owner_id=?").get(chatId, ctx.from.id);
   if(chat) {
@@ -338,7 +345,7 @@ bot.action(/delete_(-?\d+)/, async (ctx) => {
 });
 
 /* ===============================
-   REACTIONS & ANALYTICS
+   REACTIONS
 ================================ */
 
 bot.on('message_reaction', async (ctx) => {
@@ -358,34 +365,41 @@ bot.on('message_reaction', async (ctx) => {
 });
 
 /* ===============================
-   SCHEDULER
+   SCHEDULER (Fixed & Verbose)
 ================================ */
 
 async function postToChat(chatId) {
+  // 1. Check Status
   const enabled = getSetting(chatId, "enabled", "1");
-  if (enabled !== "1") return;
+  if (enabled !== "1") return { status: "disabled" };
 
+  // 2. Fetch Content
   const sourceKey = pickSource();
   const sourceObj = sources[sourceKey];
-  if (!sourceObj) return;
-
   const post = await sourceObj.fetch();
-  if (!post) return;
+  if (!post) return { status: "fetch_error" };
 
+  // 3. Check Duplicate
   const h = crypto.createHash("sha256").update(post.url || post.title).digest("hex");
   const exists = db.prepare("SELECT id FROM posts WHERE hash=?").get(h);
-  if (exists) return;
+  if (exists) return { status: "duplicate", title: post.title };
 
+  // 4. Generate AI Content
+  console.log(`🧠 Generating content for: ${post.title}`);
   const text = await generateHumanContent(post);
-  if (!text || text.includes("STOP")) return;
+  
+  if (!text) return { status: "ai_error" };
+  if (text.includes("STOP")) return { status: "rejected", title: post.title };
 
+  // 5. Send
   try {
     const sent = await bot.telegram.sendMessage(chatId, text, { parse_mode: "HTML" });
     db.prepare("INSERT INTO posts(chat_id, message_id, source, title, hash) VALUES(?,?,?,?,?)")
       .run(chatId, sent.message_id, sourceKey, post.title, h);
-    console.log(`✅ Posted to ${chatId}`);
+    return { status: "success", title: post.title };
   } catch (err) {
-    console.log(`Error sending to ${chatId}:`, err.message);
+    console.log(`❌ Send Error to ${chatId}:`, err.message);
+    return { status: "send_error" };
   }
 }
 
@@ -395,24 +409,40 @@ setInterval(async () => {
   const tasks = [];
 
   for (const c of chats) {
-    const interval = parseInt(getSetting(c.id, "interval", "60"));
+    const interval = parseInt(getSetting(c.id, "interval", "3600")); // Default 1h
     const lastPost = parseInt(getSetting(c.id, "last_post_time", "0"));
 
-    if (now - lastPost >= (interval * 60)) {
+    if (now - lastPost >= interval) {
+      // Update time BEFORE posting to prevent loops
       setSetting(c.id, "last_post_time", now.toString());
-      tasks.push(postToChat(c.id));
+      tasks.push({ id: c.id, promise: postToChat(c.id) });
     }
   }
 
   if (tasks.length > 0) {
-    console.log(`🚀 Posting to ${tasks.length} chats...`);
-    await Promise.all(tasks);
+    // Process results
+    const results = await Promise.all(tasks.map(t => t.promise));
+    
+    results.forEach((res, index) => {
+        const chatId = tasks[index].id;
+        if (res.status === "success") {
+            console.log(`✅ [${chatId}] Posted: ${res.title}`);
+        } else if (res.status === "duplicate") {
+            console.log(`⏭ [${chatId}] Duplicate: ${res.title}`);
+        } else if (res.status === "rejected") {
+            console.log(`🚫 [${chatId}] AI Rejected: ${res.title}`);
+        } else if (res.status === "disabled") {
+            // Silent
+        } else {
+            console.log(`⚠️ [${chatId}] Status: ${res.status}`);
+        }
+    });
   }
 
-}, 1 * 150);
+}, 10000); // Check loop every 10 seconds
 
 /* ===============================
-   START & ERROR HANDLING
+   START
 ================================ */
 
 bot.catch((err, ctx) => {
