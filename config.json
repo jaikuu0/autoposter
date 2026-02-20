@@ -1,0 +1,22 @@
+{
+  "posting_interval_minutes": 0.1,
+  "sources": {
+    "hackernews": true,
+    "devto": true,
+    "medium": false
+  },
+  "block_keywords": [
+    "hiring",
+    "job offer",
+    "partnership",
+    "funding round",
+    "salary",
+    "vacancy",
+    "nft sale"
+  ],
+  "persona": {
+    "tone": "friendly_expert",
+    "style": "colloquial_persian",
+    "signature": "@tech_afghan"
+  }
+}
