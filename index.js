@@ -17,7 +17,18 @@
   if (!TG_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is required!");
 
   const bot = new Telegraf(TG_TOKEN);
-  const db = new Database("autoposter.db");
+
+
+const fs = require("fs");
+const path = require("path");
+
+const DB_DIR = "./data";
+
+if (!fs.existsSync(DB_DIR)) {
+  fs.mkdirSync(DB_DIR, { recursive: true });
+}
+
+const db = new Database(path.join(DB_DIR, "autoposter.db"));
 
   /* ===============================
     DATABASE & MIGRATION
