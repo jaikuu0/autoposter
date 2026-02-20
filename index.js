@@ -17,7 +17,7 @@
   if (!TG_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is required!");
 
   const bot = new Telegraf(TG_TOKEN);
-  const db = new Database("/data/autoposter.db");
+  const db = new Database("autoposter.db");
 
   /* ===============================
     DATABASE & MIGRATION
