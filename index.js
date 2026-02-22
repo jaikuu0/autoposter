@@ -63,28 +63,45 @@ const setSetting = async (chatId, key, value) => {
 ================================ */
 
 async function generateHumanContent(post, category) {
-  let promptContext = `
-تو یک نویسنده تکنولوژی باحال و باسواد هستی.
-لحن: خودمونی.
-قوانین: فارسی بنویس ولی اصطلاحات تخصصی (API, Bug, Server) رو انگلیسی بنویس.
-آخر مطلب: نظر شخصی بده و سوال بپرس.
-اگر خبر بی‌ارزش بود بنویس: STOP
+  // این دستور باعث میشه ربات مثل یه ادمین باحال رفتار کنه نه یه خبرخوان
+  let systemPrompt = `
+تو یک ادمین کانال تلگرامی باحال و خوش‌ذوق هستی.
+وظیفه تو اینه که اخبار یا محتوا رو به زبان خودت و خلاصه شده به اعضا خبر بدی.
+قوانین:
+۱. مطلقاً از عبارت "این خبر خوب است" یا ساختار خبری استفاده نکن.
+۲. متن را نقل قول نکن! آن را بازنویسی کن.
+۳. لحن خودمونی و صمیمی داشته باش (مثل یه دوست که خبر رو میگه).
+۴. اصطلاحات تخصصی رو انگلیسی بنویس.
+۵. در انتها حتماً یه سوال جذاب یا نظر شخصی بپرس تا بحث ایجاد بشه.
+۶. اگر متن بی‌ارزش یا خیلی کوتاه بود، فقط بنویس: STOP
+۷. از تگ‌های HTML برای فرمت‌بندی استفاده کن (مثلا <b> برای ضخیم). از Markdown استفاده نکن.
 `;
 
-  if (category === "ai") promptContext = `متخصص هوش مصنوعی هستی. روی تاثیر خبر تمرکز کن.`;
-  else if (category === "design") promptContext = `طراح خلاق هستی. درباره زیبایی‌شناسی نظر بده.`;
-  else if (category === "poetry") promptContext = `ادیب و اهل قلم هستی. شعر رو با مقدمه احساسی معرفی کن.`;
-  else if (category === "religious") promptContext = `مشاور روحانی آرام هستی. نکته اخلاقی استخراج کن.`;
+  // دستورات خاص برای هر دسته‌بندی
+  if (category === "ai") systemPrompt += `روی تاثیر خبر تمرکز کن و ساده بگو چرا مهمه.`;
+  else if (category === "design") systemPrompt += `روی زیبایی و خلاقیت نظر بده.`;
+  else if (category === "poetry") systemPrompt += `شعر رو با یه مقدمه احساسی و کوتاه معرفی کن.`;
+  else if (category === "religious") systemPrompt += `با احترام و لحن آرام نکته اخلاقی استخراج کن.`;
 
-  const prompt = `${promptContext}\n\nعنوان/متن:\n${post.title}\n${post.content ? "\n" + post.content : ""}\n\nمنبع: ${post.source}`;
+  const userPrompt = `عنوان: ${post.title}\n${post.content ? "متن: " + post.content : ""}\nمنبع: ${post.source}`;
 
   try {
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
-      { model: "arcee-ai/trinity-large-preview:free", messages: [{ role: "user", content: prompt }] },
+      { 
+        model: "arcee-ai/trinity-large-preview:free",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ] 
+      },
       { headers: { Authorization: `Bearer ${AI_KEY}`, "Content-Type": "application/json" } }
     );
-    return res.data.choices[0].message.content.trim();
+    
+    let text = res.data.choices[0].message.content.trim();
+    text = text.replace(/<\/?pre>/g, '').replace(/<\/?code>/g, ''); 
+    
+    return text;
   } catch (e) {
     console.error("❌ AI Error:", e.response?.data || e.message);
     return null;
@@ -353,25 +370,26 @@ async function postToChat(chatId) {
   const validKeys = Object.keys(sources);
   topics = topics.filter(t => validKeys.includes(t));
   if (topics.length === 0) topics = ["programming"];
-  topics.sort(() => Math.random() - 0.5); // Shuffle
+  topics.sort(() => Math.random() - 0.5); 
 
-  // 2. Try Each Topic
   for (const topic of topics) {
     const sourceObj = sources[topic];
     const post = await sourceObj.fetch();
     if (!post) continue;
 
     const h = crypto.createHash("sha256").update(post.url || post.title).digest("hex");
-    
-    // Check Duplicate
     const { data: exists } = await supabase.from("posts").select("id").eq("hash", h).single();
     if (exists) continue;
-
     const text = await generateHumanContent(post, topic);
+
     if (!text || text.includes("STOP")) continue;
 
     try {
-      const sent = await bot.telegram.sendMessage(chatId, text, { parse_mode: "HTML" });
+      const sent = await bot.telegram.sendMessage(chatId, text, { 
+        parse_mode: "HTML", 
+        disable_web_page_preview: false 
+      });
+      
       await supabase.from("posts").insert({
         chat_id: chatId,
         message_id: sent.message_id,
@@ -382,13 +400,16 @@ async function postToChat(chatId) {
       return { status: "success", topic: topic };
     } catch (err) {
       console.log(`❌ Send Error: ${err.message}`);
-      return { status: "send_error" };
+      try {
+         const sent = await bot.telegram.sendMessage(chatId, text); 
+         return { status: "success", topic: topic };
+      } catch (e) {
+         return { status: "send_error" };
+      }
     }
   }
-
   return { status: "all_failed" };
 }
-
 setInterval(async () => {
   const { data: chats } = await supabase.from("chats").select("id");
   if (!chats) return;
